@@ -1,4 +1,3 @@
-
 import os
 import time
 import sqlite3
@@ -18,7 +17,8 @@ from anti_abuse import (
 # ================= ENV =================
 load_dotenv()
 TOKEN = "8614082185:AAEsAEIQgFuJo7z2eXxe2g4Jetxyu4g-8aM"
-OWNER_ID = "7925843350"
+
+OWNER_ID = 7925843350
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS credits (
     chat_id TEXT,
     total INTEGER,
     payment INTEGER,
-    last_pay REAL
+    last_pay REAL,
+    status TEXT DEFAULT 'active'
 )
 """)
 
@@ -96,28 +97,28 @@ def log_admin(admin, action, target=""):
     )
     conn.commit()
 
-# ================= REMINDER LOOP (2 HOURS) =================
+# ================= REMINDER =================
 def reminder_loop():
     while True:
         try:
-            cursor.execute("SELECT user_id, chat_id, total FROM credits")
+            cursor.execute("SELECT user_id, chat_id, total, status FROM credits")
             rows = cursor.fetchall()
 
-            for uid, chat_id, total in rows:
-                if total > 0:
-                    try:
-                        cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
-                        r = cursor.fetchone()
-                        username = r[0] if r else uid
+            for uid, chat_id, total, status in rows:
+                if status != "active":
+                    continue
 
-                        bot.send_message(
-                            chat_id,
-                            f"⚠️ Напоминание о долге\n"
-                            f"👤 @{username}\n"
-                            f"💰 Сумма: {fmt(total)}"
-                        )
-                    except:
-                        pass
+                if total > 0:
+                    cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
+                    r = cursor.fetchone()
+                    username = r[0] if r else uid
+
+                    bot.send_message(
+                        chat_id,
+                        f"⚠️ Напоминание о долге\n"
+                        f"👤 @{username}\n"
+                        f"💰 {fmt(total)}"
+                    )
 
             time.sleep(7200)  # 2 часа
         except Exception as e:
@@ -169,19 +170,7 @@ def credit(m):
 
     bot.reply_to(m, "📄 Заявка отправлена")
 
-# ================= TOP =================
-@bot.message_handler(commands=["top"])
-def top(m):
-    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
-    rows = cursor.fetchall()
-
-    text = "🏆 ТОП:\n\n"
-    for i, (name, r) in enumerate(rows, 1):
-        text += f"{i}. @{name} ⭐ {r}\n"
-
-    bot.reply_to(m, text)
-
-# ================= ADMIN =================
+# ================= ADMIN PANEL =================
 @bot.message_handler(commands=["admin"])
 def admin(m):
     if not is_admin(m.from_user.id):
@@ -198,6 +187,45 @@ def admin(m):
     )
 
     bot.send_message(m.chat.id, "⚙️ Админ-панель", reply_markup=kb)
+
+# ================= CLOSE CREDIT (НОВАЯ КОМАНДА) =================
+@bot.message_handler(commands=["closecredit"])
+def close_credit(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+
+    if len(args) < 2:
+        return bot.reply_to(m, "Пример: /closecredit 123456789")
+
+    uid = args[1]
+
+    cursor.execute("UPDATE credits SET status='closed' WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "CLOSE_CREDIT", uid)
+
+    bot.reply_to(m, f"✅ Кредит закрыт: {uid}")
+
+# ================= DELETE CREDIT =================
+@bot.message_handler(commands=["delcredit"])
+def del_credit(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "Пример: /delcredit 123456789")
+
+    uid = args[1]
+
+    cursor.execute("DELETE FROM credits WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "DELETE_CREDIT", uid)
+
+    bot.reply_to(m, f"🗑 Удалён: {uid}")
 
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
@@ -235,7 +263,7 @@ def cb(c):
         total = amount
         pay = total // periods
 
-        cursor.execute("INSERT OR REPLACE INTO credits VALUES (?, ?, ?, ?, ?, ?)",
+        cursor.execute("INSERT OR REPLACE INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')",
                        (uid, name, chat_id, total, pay, time.time()))
 
         cursor.execute("UPDATE requests SET status='approved' WHERE user_id=?", (uid,))
@@ -254,7 +282,5 @@ def cb(c):
 # ================= MAIN =================
 if __name__ == "__main__":
     logging.info("BOT STARTED")
-
     threading.Thread(target=reminder_loop, daemon=True).start()
-
     bot.polling(none_stop=True)
