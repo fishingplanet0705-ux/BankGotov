@@ -284,3 +284,93 @@ if __name__ == "__main__":
     logging.info("BOT STARTED")
     threading.Thread(target=reminder_loop, daemon=True).start()
     bot.polling(none_stop=True)
+
+# ================= DEB =================
+@bot.message_handler(commands=["debtors"])
+def debtors(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
+    rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "✅ Нет должников")
+
+    text = "📋 ДОЛЖНИКИ:\n\n"
+
+    for name, total in rows:
+        name = name or "no_username"
+        text += f"@{name} — {fmt(total)}\n"
+
+    bot.reply_to(m, text)
+
+# ================= TOP =================
+@bot.message_handler(commands=["top"])
+def top(m):
+    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
+    rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "❌ Нет данных")
+
+    text = "🏆 ТОП пользователей:\n\n"
+
+    for i, (name, r) in enumerate(rows, 1):
+        name = name or "no_username"
+        text += f"{i}. @{name} ⭐ {r}\n"
+
+    bot.reply_to(m, text)
+
+# ================= STA =================
+@bot.message_handler(commands=["stats"])
+def stats(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    # 👥 пользователи
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users = cursor.fetchone()[0]
+
+    # 📄 заявки
+    cursor.execute("SELECT COUNT(*) FROM requests")
+    requests_count = cursor.fetchone()[0]
+
+    # 💳 активные кредиты
+    cursor.execute("SELECT COUNT(*) FROM credits WHERE status='active'")
+    active_credits = cursor.fetchone()[0]
+
+    # 💰 общий долг
+    cursor.execute("SELECT SUM(total) FROM credits WHERE status='active'")
+    total_debt = cursor.fetchone()[0] or 0
+
+    # 📉 средний долг
+    avg_debt = total_debt // active_credits if active_credits else 0
+
+    # 🔝 топ-должник
+    cursor.execute("""
+        SELECT username, total 
+        FROM credits 
+        WHERE status='active'
+        ORDER BY total DESC 
+        LIMIT 1
+    """)
+    top_debtor = cursor.fetchone()
+
+    if top_debtor:
+        top_name, top_amount = top_debtor
+        top_text = f"👑 @{top_name} — {fmt(top_amount)}"
+    else:
+        top_text = "нет"
+
+    text = (
+        "📊 СТАТИСТИКА:\n\n"
+        f"👥 Пользователи: {users}\n"
+        f"📄 Заявки: {requests_count}\n"
+        f"💳 Активные кредиты: {active_credits}\n"
+        f"💰 Общий долг: {fmt(total_debt)}\n"
+        f"📉 Средний долг: {fmt(avg_debt)}\n"
+        f"{top_text}\n"
+    )
+
+    bot.reply_to(m, text)
