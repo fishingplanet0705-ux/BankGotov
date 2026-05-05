@@ -101,7 +101,7 @@ def start(m):
     ensure_user(str(m.from_user.id), m.from_user.username)
     bot.reply_to(m, "🤖 Бот запущен\n\n/credit сумма дни")
 
-# ================= CREDIT (STEP 1 - CONDITIONS) =================
+# ================= CREDIT =================
 @bot.message_handler(commands=["credit"])
 def credit(m):
     uid = str(m.from_user.id)
@@ -126,6 +126,15 @@ def credit(m):
         periods = int(args[2])
     except:
         return bot.reply_to(m, "❌ ошибка")
+
+    # ✅ СОХРАНЕНИЕ ЗАЯВКИ (FIX)
+    with lock:
+        cursor.execute("""
+        INSERT OR REPLACE INTO requests
+        (user_id, username, chat_id, amount, periods, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """, (uid, username, str(m.chat.id), amount, periods, time.time()))
+        conn.commit()
 
     kb = types.InlineKeyboardMarkup()
     kb.add(
@@ -215,14 +224,17 @@ def setrating(m):
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
 def cb(c):
+
+    if c.data == "cancel":
+        bot.answer_callback_query(c.id, "Отменено")
+        return
+
     if not is_admin(c.from_user.id):
-        if c.data == "cancel":
-            bot.answer_callback_query(c.id, "Отменено")
         return
 
     bot.answer_callback_query(c.id)
 
-    # ================= STEP 1 APPROVAL =================
+    # ================= STEP 1 =================
     if c.data.startswith("agree:"):
         _, uid, amount, periods = c.data.split(":")
 
@@ -234,21 +246,24 @@ def cb(c):
 
         bot.send_message(c.message.chat.id, f"📄 Заявка от {uid}\n💰 {amount}\n📆 {periods}", reply_markup=kb)
 
-    # ================= CREATE CREDIT =================
+    # ================= OK =================
     elif c.data.startswith("ok:"):
         _, uid, amount, periods = c.data.split(":")
 
         with lock:
-            cursor.execute("SELECT username, chat_id FROM users JOIN requests USING(user_id) WHERE user_id=?", (uid,))
-            cursor.execute("SELECT username, chat_id FROM requests WHERE user_id=?", (uid,))
+            cursor.execute("""
+            SELECT username, chat_id, amount, periods
+            FROM requests
+            WHERE user_id=?
+            """, (uid,))
             row = cursor.fetchone()
 
             if not row:
                 return
 
-            username, chat_id = row
+            username, chat_id, amount, periods = row
 
-            payment = int(amount) // int(periods)
+            payment = int(amount) // int(periods) if int(periods) > 0 else 0
 
             cursor.execute("""
             INSERT INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')
@@ -257,19 +272,34 @@ def cb(c):
             cursor.execute("UPDATE requests SET status='approved' WHERE user_id=?", (uid,))
             conn.commit()
 
-        bot.send_message(chat_id, "✅️ Кредит одобрен")
+        # ✅ игроку
+        bot.send_message(
+            chat_id,
+            "✅️Ваш кредит одобрен, спасибо что пользуетесь нашим банком✅️"
+        )
 
+        bot.send_message(c.message.chat.id, "✅ одобрено")
+
+    # ================= NO =================
     elif c.data.startswith("no:"):
         uid = c.data.split(":")[1]
 
         with lock:
             cursor.execute("SELECT chat_id FROM requests WHERE user_id=?", (uid,))
             row = cursor.fetchone()
+
             cursor.execute("UPDATE requests SET status='rejected' WHERE user_id=?", (uid,))
             conn.commit()
 
         if row:
-            bot.send_message(row[0], "❌️ Кредит отклонён | Свяжитесь с банком @ArabovBa")
+            chat_id = row[0]
+
+            bot.send_message(
+                chat_id,
+                "❌️Ваш кредит небыл одобрен, уточните причину у банка @ArabovBa"
+            )
+
+        bot.send_message(c.message.chat.id, "❌ отклонено")
 
     # ================= REQUESTS =================
     elif c.data == "req":
@@ -288,6 +318,7 @@ def cb(c):
 
         text = "📋 должники:\n\n"
         for u, t in rows:
+            u = u or "unknown"
             text += f"@{u} — {fmt(t)}\n"
 
         bot.send_message(c.message.chat.id, text)
@@ -303,6 +334,6 @@ def cb(c):
 
         bot.send_message(c.message.chat.id, f"👥 {users}\n💳 {credits}")
 
-# ================= MAIN =================
+# ================= RUN =================
 if __name__ == "__main__":
     bot.infinity_polling(skip_pending=True)
