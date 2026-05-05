@@ -164,6 +164,28 @@ def admin(m):
 
     bot.send_message(m.chat.id, "⚙️ Админка", reply_markup=kb)
 
+@bot.message_handler(commands=["closecredit"])
+def closecredit(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "/closecredit @user")
+
+    user = get_user_by_username(args[1])
+    if not user:
+        return bot.reply_to(m, "❌ не найден")
+
+    with lock:
+        cursor.execute("""
+        UPDATE credits
+        SET status='closed'
+        WHERE user_id=?
+        """, (user[0],))
+        conn.commit()
+
+    bot.reply_to(m, "✅ кредит закрыт")
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
 def cb(c):
