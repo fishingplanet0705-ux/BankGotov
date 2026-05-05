@@ -118,6 +118,7 @@ def credit(m):
         return bot.reply_to(m, "⏳ Подожди")
 
     args = m.text.split()
+
     if len(args) < 3:
         return bot.reply_to(m, "/credit 10000 7")
 
@@ -126,6 +127,30 @@ def credit(m):
         periods = int(args[2])
     except:
         return bot.reply_to(m, "❌ ошибка")
+
+    # SAVE REQUEST
+    with lock:
+        cursor.execute("""
+        INSERT OR REPLACE INTO requests
+        (user_id, username, chat_id, amount, periods, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """, (uid, username, str(m.chat.id), amount, periods, time.time()))
+        conn.commit()
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("✅ Выполнил", callback_data=f"agree:{uid}:{amount}:{periods}"),
+        types.InlineKeyboardButton("❌ Отказаться", callback_data="cancel")
+    )
+
+    bot.send_message(
+        m.chat.id,
+        "📄 Условия для кредита:\n\n"
+        "• 15 дней аккаунта\n"
+        "• 2 уровень игрового аккаунта\n\n"
+        "Нажмите кнопку ниже",
+        reply_markup=kb
+    )
 
 # ================= TOP =================
 @bot.message_handler(commands=["top"])
