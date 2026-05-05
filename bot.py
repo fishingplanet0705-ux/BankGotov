@@ -1,3 +1,4 @@
+
 import os
 import time
 import sqlite3
@@ -27,7 +28,7 @@ bot = telebot.TeleBot(TOKEN)
 
 logging.basicConfig(level=logging.INFO)
 
-# ================= DATABASE =================
+# ================= DB =================
 conn = sqlite3.connect("bank.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -131,6 +132,9 @@ def reminder_loop():
 # ================= START =================
 @bot.message_handler(commands=["start"])
 def start(m):
+    uid = str(m.from_user.id)
+    username = m.from_user.username or "no_username"
+    ensure_user(uid, username)
     bot.reply_to(m, "🤖 Бот работает")
 
 # ================= CREDIT =================
@@ -158,14 +162,115 @@ def credit(m):
         amount = int(args[1])
         periods = int(args[2])
     except:
-        return bot.reply_to(m, "❌ Ошибка формата")
+        return bot.reply_to(m, "❌ ошибка формата")
 
     cursor.execute("""
     INSERT OR REPLACE INTO requests VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (uid, username, str(m.chat.id), amount, periods, "pending", time.time()))
     conn.commit()
 
-    bot.reply_to(m, "📄 Заявка отправлена")
+    bot.reply_to(m, "📄 заявка отправлена")
+
+# ================= TOP =================
+@bot.message_handler(commands=["top"])
+def top(m):
+    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
+    rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "❌ Нет данных")
+
+    text = "🏆 ТОП пользователей:\n\n"
+
+    for i, (name, r) in enumerate(rows, 1):
+        text += f"{i}. @{name or 'user'} ⭐ {float(r):.1f}\n"
+
+    bot.reply_to(m, text)
+
+# ================= SET RATING =================
+@bot.message_handler(commands=["setrating"])
+def set_rating(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+
+    uid = None
+    rating = None
+    username = "no_username"
+
+    # reply mode
+    if m.reply_to_message:
+        uid = str(m.reply_to_message.from_user.id)
+        username = m.reply_to_message.from_user.username or "no_username"
+
+        try:
+            rating = float(args[1])
+        except:
+            return bot.reply_to(m, "Пример: /setrating 4.5")
+
+    # id mode
+    elif len(args) >= 3:
+        uid = args[1]
+        try:
+            rating = float(args[2])
+        except:
+            return bot.reply_to(m, "❌ число")
+
+    else:
+        return bot.reply_to(m, "Используй reply или /setrating id 4.5")
+
+    cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
+    r = cursor.fetchone()
+
+    if r:
+        username = r[0] if r[0] != "no_username" else username
+        cursor.execute("UPDATE users SET rating=?, username=? WHERE user_id=?",
+                       (rating, username, uid))
+    else:
+        cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, username, rating))
+
+    conn.commit()
+
+    log_admin(m.from_user.id, "SET_RATING", f"{uid}->{rating}")
+
+    bot.reply_to(m, f"⭐ {username} -> {rating}")
+
+# ================= DELETE FROM TOP =================
+@bot.message_handler(commands=["deltop"])
+def del_top(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "Пример: /deltop 123")
+
+    uid = args[1]
+
+    cursor.execute("DELETE FROM users WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "DELETE_TOP", uid)
+    bot.reply_to(m, f"🗑 удалён из топа {uid}")
+
+# ================= RESET TOP =================
+@bot.message_handler(commands=["resettop"])
+def reset_top(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "Пример: /resettop 123")
+
+    uid = args[1]
+
+    cursor.execute("UPDATE users SET rating=5 WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "RESET_TOP", uid)
+    bot.reply_to(m, f"🔄 сброшен {uid}")
 
 # ================= ADMIN =================
 @bot.message_handler(commands=["admin"])
@@ -182,106 +287,7 @@ def admin(m):
         types.InlineKeyboardButton("📊 Статистика", callback_data="stats")
     )
 
-    bot.send_message(m.chat.id, "⚙️ Админ-панель", reply_markup=kb)
-
-# ================= TOP =================
-@bot.message_handler(commands=["top"])
-def top(m):
-    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
-    rows = cursor.fetchall()
-
-    if not rows:
-        return bot.reply_to(m, "❌ Нет данных")
-
-    text = "🏆 ТОП пользователей:\n\n"
-    for i, (name, r) in enumerate(rows, 1):
-        text += f"{i}. @{name or 'no_username'} ⭐ {float(r):.1f}\n"
-
-    bot.reply_to(m, text)
-
-# ================= SET RATING =================
-@bot.message_handler(commands=["setrating"])
-def set_rating(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    args = m.text.split()
-    if len(args) < 3:
-        return bot.reply_to(m, "Пример: /setrating 123 4.5")
-
-    uid = args[1]
-
-    try:
-        rating = float(args[2])
-    except:
-        return bot.reply_to(m, "❌ число (4.5)")
-
-    cursor.execute("SELECT 1 FROM users WHERE user_id=?", (uid,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, "no_username", rating))
-    else:
-        cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, uid))
-
-    conn.commit()
-    log_admin(m.from_user.id, "SET_RATING", f"{uid}->{rating}")
-
-    bot.reply_to(m, f"⭐ {uid} -> {rating}")
-
-# ================= DELETE FROM TOP =================
-@bot.message_handler(commands=["deltop"])
-def del_top(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    uid = m.text.split()[1]
-
-    cursor.execute("DELETE FROM users WHERE user_id=?", (uid,))
-    conn.commit()
-
-    log_admin(m.from_user.id, "DELETE_TOP", uid)
-    bot.reply_to(m, f"🗑 удалён из топа: {uid}")
-
-# ================= RESET TOP =================
-@bot.message_handler(commands=["resettop"])
-def reset_top(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    uid = m.text.split()[1]
-
-    cursor.execute("UPDATE users SET rating=5 WHERE user_id=?", (uid,))
-    conn.commit()
-
-    log_admin(m.from_user.id, "RESET_TOP", uid)
-    bot.reply_to(m, f"🔄 сброшен рейтинг: {uid}")
-
-# ================= CLOSE CREDIT =================
-@bot.message_handler(commands=["closecredit"])
-def close_credit(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    uid = m.text.split()[1]
-
-    cursor.execute("UPDATE credits SET status='closed', total=0 WHERE user_id=?", (uid,))
-    conn.commit()
-
-    log_admin(m.from_user.id, "CLOSE", uid)
-    bot.reply_to(m, "✅ закрыт")
-
-# ================= DELETE CREDIT =================
-@bot.message_handler(commands=["delcredit"])
-def del_credit(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    uid = m.text.split()[1]
-
-    cursor.execute("DELETE FROM credits WHERE user_id=?", (uid,))
-    conn.commit()
-
-    log_admin(m.from_user.id, "DELETE", uid)
-    bot.reply_to(m, "🗑 удалено")
+    bot.send_message(m.chat.id, "⚙️ админ панель", reply_markup=kb)
 
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
@@ -290,12 +296,12 @@ def cb(c):
         return
 
     if c.data == "debtors":
-        cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
+        cursor.execute("SELECT username, total FROM credits WHERE status='active'")
         rows = cursor.fetchall()
 
-        text = "📋 ДОЛЖНИКИ:\n\n"
-        for name, total in rows:
-            text += f"@{name or 'no_username'} — {fmt(total)}\n"
+        text = "📋 должники:\n\n"
+        for n, t in rows:
+            text += f"@{n or 'user'} — {fmt(t)}\n"
 
         bot.send_message(c.message.chat.id, text)
 
@@ -311,7 +317,7 @@ def cb(c):
 
         bot.send_message(
             c.message.chat.id,
-            f"📊 СТАТИСТИКА\n\n👥 {users}\n💳 {credits}\n💰 {fmt(total)}"
+            f"📊 статистика\n\n👥 {users}\n💳 {credits}\n💰 {fmt(total)}"
         )
 
 # ================= MAIN =================
