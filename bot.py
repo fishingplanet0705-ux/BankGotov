@@ -67,7 +67,10 @@ conn.commit()
 
 # ================= UTILS =================
 def fmt(n):
-    return f"{int(n):,}".replace(",", ".")
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except:
+        return "0"
 
 def is_admin(uid):
     with lock:
@@ -95,7 +98,11 @@ def get_user_by_username(username):
 
 # ================= RATING =================
 def get_credit_percent(rating):
-    rating = float(rating)
+    try:
+        rating = float(rating)
+    except:
+        rating = 5
+
     if 0 <= rating < 3:
         return 25
     elif 3 <= rating < 5:
@@ -177,8 +184,10 @@ def top(m):
         rows = cursor.fetchall()
 
     text = "🏆 ТОП:\n\n"
-    for i, (u, r) in enumerate(rows, 1):
-        u = u or "no_username"
+
+    for i, row in enumerate(rows, 1):
+        u = row[0] if row and row[0] else "no_username"
+        r = row[1] if row and row[1] else 5
         text += f"{i}. @{u} ⭐ {r}\n"
 
     bot.reply_to(m, text)
@@ -210,7 +219,11 @@ def setrating(m):
     if not user:
         return bot.reply_to(m, "❌ не найден")
 
-    rating = float(args[2])
+    try:
+        rating = float(args[2])
+    except:
+        rating = 5
+
     rating = max(0, min(10, rating))
 
     with lock:
@@ -254,7 +267,10 @@ def cb(c):
 
     # ================= AGREE =================
     if c.data.startswith("agree:"):
-        _, uid, amount, periods = c.data.split(":")
+        try:
+            _, uid, amount, periods = c.data.split(":")
+        except:
+            return
 
         with lock:
             cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
@@ -270,12 +286,12 @@ def cb(c):
         bot.send_message(
             c.message.chat.id,
             f"📄 Заявка от @{uname}\n"
-            f"💰 Сумма: {fmt(int(amount))}\n"
+            f"💰 Сумма: {fmt(amount)}\n"
             f"📆 Дни: {periods}",
             reply_markup=kb
         )
 
-    # ================= APPROVE =================
+    # ================= OK =================
     elif c.data.startswith("ok:"):
         _, uid, amount, periods = c.data.split(":")
 
@@ -292,7 +308,11 @@ def cb(c):
             rating = r[0] if r else 5
 
             percent = get_credit_percent(rating)
-            payment = int(amount) // int(periods)
+
+            try:
+                payment = int(amount) // int(periods)
+            except:
+                payment = 0
 
             cursor.execute("""
             INSERT INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')
@@ -303,7 +323,7 @@ def cb(c):
 
         bot.send_message(chat_id, f"✅ Кредит одобрен\n📊 {percent}%")
 
-    # ================= REJECT =================
+    # ================= NO =================
     elif c.data.startswith("no:"):
         uid = c.data.split(":")[1]
 
@@ -314,7 +334,7 @@ def cb(c):
             cursor.execute("UPDATE requests SET status='rejected' WHERE user_id=?", (uid,))
             conn.commit()
 
-        if row:
+        if row and row[0]:
             bot.send_message(row[0], "❌ Кредит отклонён")
 
 # ================= MAIN =================
