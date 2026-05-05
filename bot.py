@@ -11,12 +11,9 @@ from anti_abuse import check_flood, credit_cooldown_check, is_banned
 
 # ================= CONFIG =================
 load_dotenv()
-TOKEN = "8614082185:AAEsAEIQgFuJo7z2eXxe2g4Jetxyu4g-8aM"
+TOKEN = os.getenv("TOKEN")
 
 OWNER_ID = 7925843350
-
-if not TOKEN:
-    raise ValueError("TOKEN не найден")
 
 bot = telebot.TeleBot(TOKEN)
 logging.basicConfig(level=logging.INFO)
@@ -78,55 +75,37 @@ def is_admin(uid):
         return cursor.fetchone() is not None
 
 def ensure_user(uid, username):
+    username = username or "no_username"
+
     with lock:
-        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (uid,))
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, username, 5))
-            conn.commit()
+        cursor.execute("""
+        INSERT INTO users (user_id, username, rating)
+        VALUES (?, ?, 5)
+        ON CONFLICT(user_id) DO UPDATE SET username=excluded.username
+        """, (uid, username))
+        conn.commit()
 
 def get_user_by_username(username):
-    username = username.replace("@", "")
+    username = username.replace("@", "").lower()
+
     with lock:
-        cursor.execute("SELECT user_id, username FROM users WHERE username=?", (username,))
+        cursor.execute("""
+        SELECT user_id, username FROM users
+        WHERE LOWER(username)=?
+        """, (username,))
         return cursor.fetchone()
-
-# ================= REMINDER =================
-def reminder_loop():
-    while True:
-        try:
-            with lock:
-                cursor.execute("SELECT chat_id, total FROM credits WHERE status='active'")
-                rows = cursor.fetchall()
-
-            for chat_id, total in rows:
-                if not chat_id or total <= 0:
-                    continue
-                try:
-                    bot.send_message(chat_id, f"⚠️ Напоминание\n💰 {fmt(total)}")
-                except:
-                    pass
-
-            time.sleep(7200)
-
-        except Exception as e:
-            logging.error(e)
-            time.sleep(10)
 
 # ================= START =================
 @bot.message_handler(commands=["start"])
 def start(m):
-    uid = str(m.from_user.id)
-    username = m.from_user.username or "no_username"
-    ensure_user(uid, username)
+    ensure_user(str(m.from_user.id), m.from_user.username)
+    bot.reply_to(m, "🤖 Бот запущен\n\n/credit сумма дни")
 
-    bot.reply_to(m, "Вас приветствует КредитБот NextGenRp\n\n/credit сумма дни")
-
-# ================= CREDIT =================
+# ================= CREDIT (STEP 1 - CONDITIONS) =================
 @bot.message_handler(commands=["credit"])
 def credit(m):
     uid = str(m.from_user.id)
-    username = m.from_user.username or "no_username"
-
+    username = m.from_user.username
     ensure_user(uid, username)
 
     if is_banned(uid):
@@ -140,7 +119,7 @@ def credit(m):
 
     args = m.text.split()
     if len(args) < 3:
-        return bot.reply_to(m, "Пример: /credit 10000 7")
+        return bot.reply_to(m, "/credit 10000 7")
 
     try:
         amount = int(args[1])
@@ -148,26 +127,20 @@ def credit(m):
     except:
         return bot.reply_to(m, "❌ ошибка")
 
-    with lock:
-        cursor.execute("""
-        INSERT OR REPLACE INTO requests VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (uid, username, str(m.chat.id), amount, periods, "pending", time.time()))
-        conn.commit()
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("✅ Выполнил", callback_data=f"agree:{uid}:{amount}:{periods}"),
+        types.InlineKeyboardButton("❌ Отказаться", callback_data="cancel")
+    )
 
-    bot.reply_to(m, "📄 заявка отправлена")
-
-# ================= TOP =================
-@bot.message_handler(commands=["top"])
-def top(m):
-    with lock:
-        cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
-        rows = cursor.fetchall()
-
-    text = "🏆 ТОП:\n\n"
-    for i, (name, r) in enumerate(rows, 1):
-        text += f"{i}. @{name} ⭐ {r}\n"
-
-    bot.reply_to(m, text)
+    bot.send_message(
+        m.chat.id,
+        "📄 Условия для кредита:\n\n"
+        "• 15 дней аккаунта\n"
+        "• 2 уровень игрового аккаунта\n\n"
+        "Нажмите кнопку ниже",
+        reply_markup=kb
+    )
 
 # ================= ADMIN =================
 @bot.message_handler(commands=["admin"])
@@ -176,42 +149,30 @@ def admin(m):
         return
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("📄 Заявки", callback_data="req"),
-        types.InlineKeyboardButton("📋 Должники", callback_data="debtors")
-    )
+    kb.add(types.InlineKeyboardButton("📄 Заявки", callback_data="req"))
+    kb.add(types.InlineKeyboardButton("📋 Должники", callback_data="debtors"))
     kb.add(types.InlineKeyboardButton("📊 Статистика", callback_data="stats"))
 
     bot.send_message(m.chat.id, "⚙️ Админка", reply_markup=kb)
 
-# ================= SET RATING =================
-@bot.message_handler(commands=["setrating"])
-def set_rating(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    args = m.text.split()
-    if len(args) < 3:
-        return bot.reply_to(m, "/setrating @user 4.5")
-
-    username = args[1]
-    rating = float(args[2])
-
-    user = get_user_by_username(username)
-    if not user:
-        return bot.reply_to(m, "❌ не найден")
-
-    uid = user[0]
+# ================= TOP =================
+@bot.message_handler(commands=["top"])
+def top(m):
+    ensure_user(str(m.from_user.id), m.from_user.username)
 
     with lock:
-        cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, uid))
-        conn.commit()
+        cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
+        rows = cursor.fetchall()
 
-    bot.reply_to(m, f"⭐ {username} -> {rating}")
+    text = "🏆 ТОП:\n\n"
+    for i, (u, r) in enumerate(rows, 1):
+        text += f"{i}. @{u} ⭐ {r}\n"
+
+    bot.reply_to(m, text)
 
 # ================= DELTOP =================
 @bot.message_handler(commands=["deltop"])
-def del_top(m):
+def deltop(m):
     if not is_admin(m.from_user.id):
         return
 
@@ -223,69 +184,77 @@ def del_top(m):
     if not user:
         return bot.reply_to(m, "❌ не найден")
 
-    uid = user[0]
-
     with lock:
-        cursor.execute("DELETE FROM users WHERE user_id=?", (uid,))
+        cursor.execute("DELETE FROM users WHERE user_id=?", (user[0],))
         conn.commit()
 
     bot.reply_to(m, "🗑 удалён")
 
-# ================= RESET TOP =================
-@bot.message_handler(commands=["resettop"])
-def reset_top(m):
+# ================= SET RATING =================
+@bot.message_handler(commands=["setrating"])
+def setrating(m):
     if not is_admin(m.from_user.id):
         return
 
     args = m.text.split()
-    if len(args) < 2:
-        return bot.reply_to(m, "/resettop @user")
+    if len(args) < 3:
+        return bot.reply_to(m, "/setrating @user 4.5")
 
     user = get_user_by_username(args[1])
     if not user:
         return bot.reply_to(m, "❌ не найден")
 
-    uid = user[0]
+    rating = float(args[2])
 
     with lock:
-        cursor.execute("UPDATE users SET rating=5 WHERE user_id=?", (uid,))
+        cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, user[0]))
         conn.commit()
 
-    bot.reply_to(m, "🔄 сброшен")
+    bot.reply_to(m, "⭐ обновлено")
 
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
 def cb(c):
     if not is_admin(c.from_user.id):
+        if c.data == "cancel":
+            bot.answer_callback_query(c.id, "Отменено")
         return
 
     bot.answer_callback_query(c.id)
 
-    if c.data == "req":
-        with lock:
-            cursor.execute("SELECT user_id, username, amount, periods FROM requests")
-            rows = cursor.fetchall()
+    # ================= STEP 1 APPROVAL =================
+    if c.data.startswith("agree:"):
+        _, uid, amount, periods = c.data.split(":")
 
-        for uid, username, amount, periods in rows:
-            kb = types.InlineKeyboardMarkup()
-            kb.add(
-                types.InlineKeyboardButton("✅", callback_data=f"ok:{uid}"),
-                types.InlineKeyboardButton("❌", callback_data=f"no:{uid}")
-            )
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok:{uid}:{amount}:{periods}"),
+            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{uid}")
+        )
 
-            bot.send_message(
-                c.message.chat.id,
-                f"@{username}\n💰 {amount}\n📆 {periods}",
-                reply_markup=kb
-            )
+        bot.send_message(c.message.chat.id, f"📄 Заявка от {uid}\n💰 {amount}\n📆 {periods}", reply_markup=kb)
 
+    # ================= CREATE CREDIT =================
     elif c.data.startswith("ok:"):
-        uid = c.data.split(":")[1]
+        _, uid, amount, periods = c.data.split(":")
 
         with lock:
+            cursor.execute("SELECT username, chat_id FROM users JOIN requests USING(user_id) WHERE user_id=?", (uid,))
+            cursor.execute("SELECT username, chat_id FROM requests WHERE user_id=?", (uid,))
+            row = cursor.fetchone()
+
+            if not row:
+                return
+
+            username, chat_id = row
+
+            payment = int(amount) // int(periods)
+
+            cursor.execute("""
+            INSERT INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')
+            """, (uid, username, chat_id, amount, payment, time.time()))
+
             cursor.execute("UPDATE requests SET status='approved' WHERE user_id=?", (uid,))
-            cursor.execute("SELECT chat_id FROM requests WHERE user_id=?", (uid,))
-            chat_id = cursor.fetchone()[0]
             conn.commit()
 
         bot.send_message(chat_id, "✅️ Кредит одобрен")
@@ -294,24 +263,36 @@ def cb(c):
         uid = c.data.split(":")[1]
 
         with lock:
-            cursor.execute("UPDATE requests SET status='rejected' WHERE user_id=?", (uid,))
             cursor.execute("SELECT chat_id FROM requests WHERE user_id=?", (uid,))
-            chat_id = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            cursor.execute("UPDATE requests SET status='rejected' WHERE user_id=?", (uid,))
             conn.commit()
 
-        bot.send_message(chat_id, "❌️ Кредит отклонён | Свяжитесь с банком @ArabovBa")
+        if row:
+            bot.send_message(row[0], "❌️ Кредит отклонён | Свяжитесь с банком @ArabovBa")
 
+    # ================= REQUESTS =================
+    elif c.data == "req":
+        with lock:
+            cursor.execute("SELECT user_id, username, amount, periods FROM requests WHERE status='pending'")
+            rows = cursor.fetchall()
+
+        for uid, u, a, p in rows:
+            bot.send_message(c.message.chat.id, f"@{u}\n💰 {a}\n📆 {p}")
+
+    # ================= DEBTORS =================
     elif c.data == "debtors":
         with lock:
             cursor.execute("SELECT username, total FROM credits WHERE status='active'")
             rows = cursor.fetchall()
 
         text = "📋 должники:\n\n"
-        for n, t in rows:
-            text += f"@{n} — {fmt(t)}\n"
+        for u, t in rows:
+            text += f"@{u} — {fmt(t)}\n"
 
         bot.send_message(c.message.chat.id, text)
 
+    # ================= STATS =================
     elif c.data == "stats":
         with lock:
             cursor.execute("SELECT COUNT(*) FROM users")
@@ -324,5 +305,4 @@ def cb(c):
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    threading.Thread(target=reminder_loop, daemon=True).start()
     bot.infinity_polling(skip_pending=True)
