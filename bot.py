@@ -17,8 +17,10 @@ from anti_abuse import (
 # ================= ENV =================
 load_dotenv()
 TOKEN = "8614082185:AAEsAEIQgFuJo7z2eXxe2g4Jetxyu4g-8aM"
-
 OWNER_ID = 7925843350
+
+if not TOKEN:
+    raise ValueError("TOKEN не найден в .env")
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -78,7 +80,6 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 """)
 
 conn.commit()
-
 cursor.execute("INSERT OR IGNORE INTO admins VALUES (?)", (OWNER_ID,))
 conn.commit()
 
@@ -102,35 +103,33 @@ def reminder_loop():
     while True:
         try:
             cursor.execute("SELECT user_id, chat_id, total, status FROM credits")
-            rows = cursor.fetchall()
-
-            for uid, chat_id, total, status in rows:
-                if status != "active":
+            for uid, chat_id, total, status in cursor.fetchall():
+                if status != "active" or total <= 0:
                     continue
 
-                if total > 0:
-                    cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
-                    r = cursor.fetchone()
-                    username = r[0] if r else uid
+                cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
+                r = cursor.fetchone()
+                username = r[0] if r else uid
 
+                try:
                     bot.send_message(
                         chat_id,
-                        f"⚠️ Напоминание о долге\n"
-                        f"👤 @{username}\n"
-                        f"💰 {fmt(total)}"
+                        f"⚠️ Напоминание о долге\n👤 @{username}\n💰 {fmt(total)}"
                     )
+                except:
+                    pass
 
-            time.sleep(7200)  # 2 часа
+            time.sleep(7200)
         except Exception as e:
             logging.error(e)
             time.sleep(10)
 
-# ================= START =================
+# ================= COMMANDS =================
+
 @bot.message_handler(commands=["start"])
 def start(m):
     bot.reply_to(m, "🤖 Бот работает")
 
-# ================= CREDIT =================
 @bot.message_handler(commands=["credit"])
 def credit(m):
     uid = str(m.from_user.id)
@@ -170,45 +169,94 @@ def credit(m):
 
     bot.reply_to(m, "📄 Заявка отправлена")
 
-# ================= ADMIN PANEL =================
-@bot.message_handler(commands=["admin"])
-def admin(m):
+@bot.message_handler(commands=["top"])
+def top(m):
+    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
+    rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "❌ Нет данных")
+
+    text = "🏆 ТОП пользователей:\n\n"
+    for i, (name, r) in enumerate(rows, 1):
+        text += f"{i}. @{name or 'no_username'} ⭐ {r}\n"
+
+    bot.reply_to(m, text)
+
+@bot.message_handler(commands=["debtors"])
+def debtors(m):
     if not is_admin(m.from_user.id):
         return
 
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("📄 Заявки", callback_data="req"),
-        types.InlineKeyboardButton("📋 Должники", callback_data="debtors")
-    )
-    kb.add(
-        types.InlineKeyboardButton("📜 Логи", callback_data="logs"),
-        types.InlineKeyboardButton("📊 Статистика", callback_data="stats")
+    cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
+    rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "✅ Нет должников")
+
+    text = "📋 ДОЛЖНИКИ:\n\n"
+    for name, total in rows:
+        text += f"@{name or 'no_username'} — {fmt(total)}\n"
+
+    bot.reply_to(m, text)
+
+@bot.message_handler(commands=["stats"])
+def stats(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM requests")
+    req = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM credits WHERE status='active'")
+    credits = cursor.fetchone()[0]
+
+    cursor.execute("SELECT SUM(total) FROM credits WHERE status='active'")
+    total = cursor.fetchone()[0] or 0
+
+    avg = total // credits if credits else 0
+
+    cursor.execute("""
+        SELECT username, total FROM credits
+        WHERE status='active'
+        ORDER BY total DESC LIMIT 1
+    """)
+    top = cursor.fetchone()
+
+    top_text = f"👑 @{top[0]} — {fmt(top[1])}" if top else "нет"
+
+    text = (
+        f"📊 СТАТИСТИКА:\n\n"
+        f"👥 Пользователи: {users}\n"
+        f"📄 Заявки: {req}\n"
+        f"💳 Кредиты: {credits}\n"
+        f"💰 Долг: {fmt(total)}\n"
+        f"📉 Средний: {fmt(avg)}\n"
+        f"{top_text}"
     )
 
-    bot.send_message(m.chat.id, "⚙️ Админ-панель", reply_markup=kb)
+    bot.reply_to(m, text)
 
-# ================= CLOSE CREDIT (НОВАЯ КОМАНДА) =================
 @bot.message_handler(commands=["closecredit"])
 def close_credit(m):
     if not is_admin(m.from_user.id):
         return
 
     args = m.text.split()
-
     if len(args) < 2:
-        return bot.reply_to(m, "Пример: /closecredit 123456789")
+        return bot.reply_to(m, "Пример: /closecredit 123")
 
     uid = args[1]
 
     cursor.execute("UPDATE credits SET status='closed' WHERE user_id=?", (uid,))
     conn.commit()
 
-    log_admin(m.from_user.id, "CLOSE_CREDIT", uid)
+    log_admin(m.from_user.id, "CLOSE", uid)
+    bot.reply_to(m, "✅ Кредит закрыт")
 
-    bot.reply_to(m, f"✅ Кредит закрыт: {uid}")
-
-# ================= DELETE CREDIT =================
 @bot.message_handler(commands=["delcredit"])
 def del_credit(m):
     if not is_admin(m.from_user.id):
@@ -216,16 +264,15 @@ def del_credit(m):
 
     args = m.text.split()
     if len(args) < 2:
-        return bot.reply_to(m, "Пример: /delcredit 123456789")
+        return bot.reply_to(m, "Пример: /delcredit 123")
 
     uid = args[1]
 
     cursor.execute("DELETE FROM credits WHERE user_id=?", (uid,))
     conn.commit()
 
-    log_admin(m.from_user.id, "DELETE_CREDIT", uid)
-
-    bot.reply_to(m, f"🗑 Удалён: {uid}")
+    log_admin(m.from_user.id, "DELETE", uid)
+    bot.reply_to(m, "🗑 Удалено")
 
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
@@ -235,9 +282,7 @@ def cb(c):
 
     if c.data == "req":
         cursor.execute("SELECT user_id, username, amount, periods FROM requests WHERE status='pending'")
-        rows = cursor.fetchall()
-
-        for uid, name, amount, periods in rows:
+        for uid, name, amount, periods in cursor.fetchall():
             kb = types.InlineKeyboardMarkup()
             kb.add(
                 types.InlineKeyboardButton("✅", callback_data=f"ok_{uid}"),
@@ -259,12 +304,13 @@ def cb(c):
             return
 
         name, chat_id, amount, periods = r
-
         total = amount
         pay = total // periods
 
-        cursor.execute("INSERT OR REPLACE INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')",
-                       (uid, name, chat_id, total, pay, time.time()))
+        cursor.execute(
+            "INSERT OR REPLACE INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')",
+            (uid, name, chat_id, total, pay, time.time())
+        )
 
         cursor.execute("UPDATE requests SET status='approved' WHERE user_id=?", (uid,))
         conn.commit()
@@ -273,7 +319,6 @@ def cb(c):
 
     elif c.data.startswith("no_"):
         uid = c.data.split("_")[1]
-
         cursor.execute("DELETE FROM requests WHERE user_id=?", (uid,))
         conn.commit()
 
@@ -284,93 +329,3 @@ if __name__ == "__main__":
     logging.info("BOT STARTED")
     threading.Thread(target=reminder_loop, daemon=True).start()
     bot.polling(none_stop=True)
-
-# ================= DEB =================
-@bot.message_handler(commands=["debtors"])
-def debtors(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
-    rows = cursor.fetchall()
-
-    if not rows:
-        return bot.reply_to(m, "✅ Нет должников")
-
-    text = "📋 ДОЛЖНИКИ:\n\n"
-
-    for name, total in rows:
-        name = name or "no_username"
-        text += f"@{name} — {fmt(total)}\n"
-
-    bot.reply_to(m, text)
-
-# ================= TOP =================
-@bot.message_handler(commands=["top"])
-def top(m):
-    cursor.execute("SELECT username, rating FROM users ORDER BY rating DESC LIMIT 10")
-    rows = cursor.fetchall()
-
-    if not rows:
-        return bot.reply_to(m, "❌ Нет данных")
-
-    text = "🏆 ТОП пользователей:\n\n"
-
-    for i, (name, r) in enumerate(rows, 1):
-        name = name or "no_username"
-        text += f"{i}. @{name} ⭐ {r}\n"
-
-    bot.reply_to(m, text)
-
-# ================= STA =================
-@bot.message_handler(commands=["stats"])
-def stats(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    # 👥 пользователи
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users = cursor.fetchone()[0]
-
-    # 📄 заявки
-    cursor.execute("SELECT COUNT(*) FROM requests")
-    requests_count = cursor.fetchone()[0]
-
-    # 💳 активные кредиты
-    cursor.execute("SELECT COUNT(*) FROM credits WHERE status='active'")
-    active_credits = cursor.fetchone()[0]
-
-    # 💰 общий долг
-    cursor.execute("SELECT SUM(total) FROM credits WHERE status='active'")
-    total_debt = cursor.fetchone()[0] or 0
-
-    # 📉 средний долг
-    avg_debt = total_debt // active_credits if active_credits else 0
-
-    # 🔝 топ-должник
-    cursor.execute("""
-        SELECT username, total 
-        FROM credits 
-        WHERE status='active'
-        ORDER BY total DESC 
-        LIMIT 1
-    """)
-    top_debtor = cursor.fetchone()
-
-    if top_debtor:
-        top_name, top_amount = top_debtor
-        top_text = f"👑 @{top_name} — {fmt(top_amount)}"
-    else:
-        top_text = "нет"
-
-    text = (
-        "📊 СТАТИСТИКА:\n\n"
-        f"👥 Пользователи: {users}\n"
-        f"📄 Заявки: {requests_count}\n"
-        f"💳 Активные кредиты: {active_credits}\n"
-        f"💰 Общий долг: {fmt(total_debt)}\n"
-        f"📉 Средний долг: {fmt(avg_debt)}\n"
-        f"{top_text}\n"
-    )
-
-    bot.reply_to(m, text)
