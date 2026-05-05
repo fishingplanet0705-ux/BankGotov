@@ -110,7 +110,7 @@ def get_credit_percent(rating):
 @bot.message_handler(commands=["start"])
 def start(m):
     ensure_user(str(m.from_user.id), m.from_user.username)
-    bot.reply_to(m, "🤖 Бот запущен\n\n/credit сумма дни")
+    bot.reply_to(m, "Вас приветствует КредитБот NextGenRp\n\n/credit сумма дни")
 
 # ================= CREDIT =================
 @bot.message_handler(commands=["credit"])
@@ -153,9 +153,13 @@ def credit(m):
     )
 
     bot.send_message(
-        m.chat.id,
-        "📄 Заявка отправлена\nНажмите кнопку ниже",
-        reply_markup=kb
+    m.chat.id,
+    "📄 Заявка отправлена\n\n"
+    "📌 Условия для кредита:\n"
+    "• 15 дней аккаунта\n"
+    "• 2 уровень игрового аккаунта\n\n"
+    "Нажмите кнопку ниже",
+    reply_markup=kb
     )
 
 # ================= TOP =================
