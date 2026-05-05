@@ -287,3 +287,27 @@ def cb(c):
 # ================= MAIN =================
 if __name__ == "__main__":
     bot.infinity_polling(skip_pending=True)
+
+# ================= ClOSE =================    
+@bot.message_handler(commands=["closecredit"])
+def closecredit(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "/closecredit @user")
+
+    user = get_user_by_username(args[1])
+    if not user:
+        return bot.reply_to(m, "❌ не найден")
+
+    with lock:
+        cursor.execute("""
+        UPDATE credits
+        SET status='closed'
+        WHERE user_id=?
+        """, (user[0],))
+        conn.commit()
+
+    bot.reply_to(m, "✅ кредит закрыт")
