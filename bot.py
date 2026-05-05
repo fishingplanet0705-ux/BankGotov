@@ -81,7 +81,6 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 """)
 
 conn.commit()
-
 cursor.execute("INSERT OR IGNORE INTO admins VALUES (?)", (OWNER_ID,))
 conn.commit()
 
@@ -113,23 +112,23 @@ def reminder_loop():
     while True:
         try:
             cursor.execute("SELECT user_id, chat_id, total, status FROM credits")
+            rows = cursor.fetchall()
 
-            for uid, chat_id, total, status in cursor.fetchall():
+            for uid, chat_id, total, status in rows:
                 if status != "active" or total <= 0:
                     continue
 
-                bot.send_message(
-                    chat_id,
-                    f"⚠️ Напоминание\n💰 {fmt(total)}"
-                )
+                try:
+                    bot.send_message(chat_id, f"⚠️ Напоминание долга\n💰 {fmt(total)}")
+                except:
+                    pass
 
             time.sleep(7200)
         except Exception as e:
             logging.error(e)
             time.sleep(10)
 
-# ================= COMMANDS =================
-
+# ================= START =================
 @bot.message_handler(commands=["start"])
 def start(m):
     bot.reply_to(m, "🤖 Бот работает")
@@ -152,7 +151,6 @@ def credit(m):
         return bot.reply_to(m, "⏳ Подожди минуту")
 
     args = m.text.split()
-
     if len(args) < 3:
         return bot.reply_to(m, "Пример: /credit 10000 7")
 
@@ -196,7 +194,6 @@ def top(m):
         return bot.reply_to(m, "❌ Нет данных")
 
     text = "🏆 ТОП пользователей:\n\n"
-
     for i, (name, r) in enumerate(rows, 1):
         text += f"{i}. @{name or 'no_username'} ⭐ {float(r):.1f}\n"
 
@@ -255,9 +252,14 @@ def set_rating(m):
     try:
         rating = float(args[2])
     except:
-        return bot.reply_to(m, "❌ Нужно число (например 4.5)")
+        return bot.reply_to(m, "❌ число (4.5)")
 
-    cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, uid))
+    cursor.execute("SELECT 1 FROM users WHERE user_id=?", (uid,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (uid, "no_username", rating))
+    else:
+        cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, uid))
+
     conn.commit()
 
     log_admin(m.from_user.id, "SET_RATING", f"{uid}->{rating}")
@@ -275,7 +277,7 @@ def close_credit(m):
     conn.commit()
 
     log_admin(m.from_user.id, "CLOSE", uid)
-    bot.reply_to(m, "✅ Кредит закрыт")
+    bot.reply_to(m, "✅ закрыт")
 
 # ================= DELETE CREDIT =================
 @bot.message_handler(commands=["delcredit"])
@@ -289,7 +291,7 @@ def del_credit(m):
     conn.commit()
 
     log_admin(m.from_user.id, "DELETE", uid)
-    bot.reply_to(m, "🗑 Удалено")
+    bot.reply_to(m, "🗑 удалено")
 
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
@@ -343,7 +345,7 @@ def cb(c):
         cursor.execute("DELETE FROM requests WHERE user_id=?", (uid,))
         conn.commit()
 
-        bot.send_message(c.message.chat.id, "❌ Отказано")
+        bot.send_message(c.message.chat.id, "❌ отказано")
 
 # ================= MAIN =================
 if __name__ == "__main__":
