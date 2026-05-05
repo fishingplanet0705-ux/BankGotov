@@ -253,16 +253,26 @@ def cb(c):
 
     # STEP
     if c.data.startswith("agree:"):
-        _, uid, amount, periods = c.data.split(":")
+    _, uid, amount, periods = c.data.split(":")
 
-        kb = types.InlineKeyboardMarkup()
-        kb.add(
-            types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok:{uid}:{amount}:{periods}"),
-            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{uid}")
-        )
+    with lock:
+        cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
+        row = cursor.fetchone()
+        uname = row[0] if row else "unknown"
 
-        bot.send_message(c.message.chat.id, f"📄 Заявка {uid}", reply_markup=kb)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok:{uid}:{amount}:{periods}"),
+        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{uid}")
+    )
 
+    bot.send_message(
+        c.message.chat.id,
+        f"📄 Заявка от @{uname}\n"
+        f"💰 Сумма: {fmt(int(amount))}\n"
+        f"📆 Дни: {periods}",
+        reply_markup=kb
+    )
     # APPROVE
     elif c.data.startswith("ok:"):
         _, uid, amount, periods = c.data.split(":")
