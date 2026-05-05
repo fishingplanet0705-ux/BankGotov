@@ -11,7 +11,7 @@ from anti_abuse import check_flood, credit_cooldown_check, is_banned
 
 # ================= CONFIG =================
 load_dotenv()
-TOKEN = os.getenv("TOKEN")
+TOKEN = "8614082185:AAEsAEIQgFuJo7z2eXxe2g4Jetxyu4g-8aM"
 
 OWNER_ID = 7925843350
 
