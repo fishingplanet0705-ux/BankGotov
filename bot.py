@@ -147,9 +147,8 @@ def start(m):
 
     bot.reply_to(
         m,
-        "Вас приветствует КредитБот NextGenRp\n\n"
-        "📌 /credit сумма дни\n"
-        "📌 ожидайте ответа администрации"
+        "🤖 КредитБот NextGenRp\n\n"
+        "/credit сумма дни"
     )
 
 # ================= CREDIT =================
@@ -218,6 +217,74 @@ def admin(m):
 
     bot.send_message(m.chat.id, "⚙️ админка", reply_markup=kb)
 
+# ================= SET RATING FIX =================
+@bot.message_handler(commands=["setrating"])
+def set_rating(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+
+    uid = None
+    rating = None
+    username = "no_username"
+
+    if m.reply_to_message:
+        uid = str(m.reply_to_message.from_user.id)
+        username = m.reply_to_message.from_user.username or "no_username"
+
+        try:
+            rating = float(args[1])
+        except:
+            return bot.reply_to(m, "Пример: /setrating 4.5")
+
+    elif len(args) >= 3:
+        uid = args[1]
+        try:
+            rating = float(args[2])
+        except:
+            return bot.reply_to(m, "❌ ошибка числа")
+
+    else:
+        return bot.reply_to(m, "Используй /setrating id 4.5")
+
+    with lock:
+        cursor.execute("""
+        INSERT INTO users (user_id, username, rating)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            rating=excluded.rating,
+            username=excluded.username
+        """, (uid, username, rating))
+        conn.commit()
+
+    log_admin(m.from_user.id, "SET_RATING", f"{uid}->{rating}")
+
+    bot.reply_to(m, f"⭐ {username} -> {rating}")
+
+# ================= RESET TOP =================
+@bot.message_handler(commands=["resettop"])
+def reset_top(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    args = m.text.split()
+    if len(args) < 2:
+        return bot.reply_to(m, "Пример: /resettop 123")
+
+    uid = args[1]
+
+    with lock:
+        cursor.execute("""
+        INSERT INTO users (user_id, username, rating)
+        VALUES (?, 'no_username', 5)
+        ON CONFLICT(user_id) DO UPDATE SET rating=5
+        """, (uid,))
+        conn.commit()
+
+    log_admin(m.from_user.id, "RESET_TOP", uid)
+    bot.reply_to(m, f"🔄 reset {uid}")
+
 # ================= CALLBACK =================
 @bot.callback_query_handler(func=lambda c: True)
 def cb(c):
@@ -226,7 +293,6 @@ def cb(c):
 
     bot.answer_callback_query(c.id)
 
-    # ================= ЗАЯВКИ =================
     if c.data == "req":
         with lock:
             cursor.execute("""
@@ -256,7 +322,6 @@ def cb(c):
 
             bot.send_message(c.message.chat.id, text, reply_markup=kb)
 
-    # ================= APPROVE =================
     elif c.data.startswith("approve:"):
         uid = c.data.split(":")[1]
 
@@ -271,7 +336,6 @@ def cb(c):
 
         bot.send_message(c.message.chat.id, f"✔️ Одобрено {uid}")
 
-    # ================= REJECT =================
     elif c.data.startswith("reject:"):
         uid = c.data.split(":")[1]
 
@@ -286,7 +350,6 @@ def cb(c):
 
         bot.send_message(c.message.chat.id, f"❌️ Отклонено {uid}")
 
-    # ================= DEBTORS =================
     elif c.data == "debtors":
         with lock:
             cursor.execute("SELECT username, total FROM credits WHERE status='active'")
@@ -298,7 +361,6 @@ def cb(c):
 
         bot.send_message(c.message.chat.id, text)
 
-    # ================= STATS =================
     elif c.data == "stats":
         with lock:
             cursor.execute("SELECT COUNT(*) FROM users")
