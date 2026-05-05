@@ -14,7 +14,7 @@ from anti_abuse import (
     is_banned
 )
 
-# ================= ENV =================
+# ================= CONFIG =================
 load_dotenv()
 TOKEN = "8614082185:AAEsAEIQgFuJo7z2eXxe2g4Jetxyu4g-8aM"
 
@@ -25,10 +25,9 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# ================= LOG =================
 logging.basicConfig(level=logging.INFO)
 
-# ================= DB =================
+# ================= DATABASE =================
 conn = sqlite3.connect("bank.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -81,6 +80,7 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 """)
 
 conn.commit()
+
 cursor.execute("INSERT OR IGNORE INTO admins VALUES (?)", (OWNER_ID,))
 conn.commit()
 
@@ -199,44 +199,6 @@ def top(m):
 
     bot.reply_to(m, text)
 
-# ================= DEBTORS =================
-@bot.message_handler(commands=["debtors"])
-def debtors(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
-    rows = cursor.fetchall()
-
-    if not rows:
-        return bot.reply_to(m, "✅ Нет должников")
-
-    text = "📋 ДОЛЖНИКИ:\n\n"
-    for name, total in rows:
-        text += f"@{name or 'no_username'} — {fmt(total)}\n"
-
-    bot.reply_to(m, text)
-
-# ================= STATS =================
-@bot.message_handler(commands=["stats"])
-def stats(m):
-    if not is_admin(m.from_user.id):
-        return
-
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM credits WHERE status='active'")
-    credits = cursor.fetchone()[0]
-
-    cursor.execute("SELECT SUM(total) FROM credits WHERE status='active'")
-    total = cursor.fetchone()[0] or 0
-
-    bot.reply_to(
-        m,
-        f"📊 СТАТИСТИКА\n\n👥 {users}\n💳 {credits}\n💰 {fmt(total)}"
-    )
-
 # ================= SET RATING =================
 @bot.message_handler(commands=["setrating"])
 def set_rating(m):
@@ -261,9 +223,37 @@ def set_rating(m):
         cursor.execute("UPDATE users SET rating=? WHERE user_id=?", (rating, uid))
 
     conn.commit()
-
     log_admin(m.from_user.id, "SET_RATING", f"{uid}->{rating}")
+
     bot.reply_to(m, f"⭐ {uid} -> {rating}")
+
+# ================= DELETE FROM TOP =================
+@bot.message_handler(commands=["deltop"])
+def del_top(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    uid = m.text.split()[1]
+
+    cursor.execute("DELETE FROM users WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "DELETE_TOP", uid)
+    bot.reply_to(m, f"🗑 удалён из топа: {uid}")
+
+# ================= RESET TOP =================
+@bot.message_handler(commands=["resettop"])
+def reset_top(m):
+    if not is_admin(m.from_user.id):
+        return
+
+    uid = m.text.split()[1]
+
+    cursor.execute("UPDATE users SET rating=5 WHERE user_id=?", (uid,))
+    conn.commit()
+
+    log_admin(m.from_user.id, "RESET_TOP", uid)
+    bot.reply_to(m, f"🔄 сброшен рейтинг: {uid}")
 
 # ================= CLOSE CREDIT =================
 @bot.message_handler(commands=["closecredit"])
@@ -300,52 +290,29 @@ def cb(c):
         return
 
     if c.data == "debtors":
-        debtors(c.message)
+        cursor.execute("SELECT username, total FROM credits WHERE status='active' AND total > 0")
+        rows = cursor.fetchall()
+
+        text = "📋 ДОЛЖНИКИ:\n\n"
+        for name, total in rows:
+            text += f"@{name or 'no_username'} — {fmt(total)}\n"
+
+        bot.send_message(c.message.chat.id, text)
 
     elif c.data == "stats":
-        stats(c.message)
+        cursor.execute("SELECT COUNT(*) FROM users")
+        users = cursor.fetchone()[0]
 
-    elif c.data == "req":
-        cursor.execute("SELECT user_id, username, amount, periods FROM requests WHERE status='pending'")
-        for uid, name, amount, periods in cursor.fetchall():
-            kb = types.InlineKeyboardMarkup()
-            kb.add(
-                types.InlineKeyboardButton("✅", callback_data=f"ok_{uid}"),
-                types.InlineKeyboardButton("❌", callback_data=f"no_{uid}")
-            )
+        cursor.execute("SELECT COUNT(*) FROM credits WHERE status='active'")
+        credits = cursor.fetchone()[0]
 
-            bot.send_message(
-                c.message.chat.id,
-                f"👤 @{name}\n💰 {fmt(amount)}\n📊 {periods}",
-                reply_markup=kb
-            )
+        cursor.execute("SELECT SUM(total) FROM credits WHERE status='active'")
+        total = cursor.fetchone()[0] or 0
 
-    elif c.data.startswith("ok_"):
-        uid = c.data.split("_")[1]
-
-        cursor.execute("SELECT username, chat_id, amount, periods FROM requests WHERE user_id=?", (uid,))
-        r = cursor.fetchone()
-        if not r:
-            return
-
-        name, chat_id, amount, periods = r
-
-        cursor.execute(
-            "INSERT OR REPLACE INTO credits VALUES (?, ?, ?, ?, ?, ?, 'active')",
-            (uid, name, chat_id, amount, amount // periods, time.time())
+        bot.send_message(
+            c.message.chat.id,
+            f"📊 СТАТИСТИКА\n\n👥 {users}\n💳 {credits}\n💰 {fmt(total)}"
         )
-
-        cursor.execute("UPDATE requests SET status='approved' WHERE user_id=?", (uid,))
-        conn.commit()
-
-        bot.send_message(chat_id, f"✅ Одобрено\n💰 {fmt(amount)}")
-
-    elif c.data.startswith("no_"):
-        uid = c.data.split("_")[1]
-        cursor.execute("DELETE FROM requests WHERE user_id=?", (uid,))
-        conn.commit()
-
-        bot.send_message(c.message.chat.id, "❌ отказано")
 
 # ================= MAIN =================
 if __name__ == "__main__":
