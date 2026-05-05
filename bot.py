@@ -144,7 +144,7 @@ def start(m):
     uid = str(m.from_user.id)
     username = m.from_user.username or "no_username"
     ensure_user(uid, username)
-    bot.reply_to(m, "🤖 Бот работает")
+    bot.reply_to(m, "Вас приветствует КредитБот для проекта NextGenRp. Введите /credit (сумма) (время рп).После чего ожидайте ✅️Кредит одобрен/❌️Кредит отклонён")
 
 # ================= CREDIT =================
 @bot.message_handler(commands=["credit"])
