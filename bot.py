@@ -93,7 +93,7 @@ def get_user_by_username(username):
         """, (username,))
         return cursor.fetchone()
 
-# ================= RATING SYSTEM =================
+# ================= RATING =================
 def get_credit_percent(rating):
     rating = float(rating)
     if 0 <= rating < 3:
@@ -153,13 +153,13 @@ def credit(m):
     )
 
     bot.send_message(
-    m.chat.id,
-    "📄 Заявка отправлена\n\n"
-    "📌 Условия для кредита:\n"
-    "• 15 дней аккаунта\n"
-    "• 2 уровень игрового аккаунта\n\n"
-    "Нажмите кнопку ниже",
-    reply_markup=kb
+        m.chat.id,
+        "📄 Заявка отправлена\n\n"
+        "📌 Условия для кредита:\n"
+        "• 15 дней аккаунта\n"
+        "• 2 уровень игрового аккаунта\n\n"
+        "Нажмите кнопку ниже",
+        reply_markup=kb
     )
 
 # ================= TOP =================
@@ -178,6 +178,7 @@ def top(m):
 
     text = "🏆 ТОП:\n\n"
     for i, (u, r) in enumerate(rows, 1):
+        u = u or "no_username"
         text += f"{i}. @{u} ⭐ {r}\n"
 
     bot.reply_to(m, text)
@@ -251,36 +252,36 @@ def cb(c):
 
     bot.answer_callback_query(c.id)
 
-    # STEP
+    # ================= AGREE =================
     if c.data.startswith("agree:"):
-    _, uid, amount, periods = c.data.split(":")
+        _, uid, amount, periods = c.data.split(":")
 
-    with lock:
-        cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
-        row = cursor.fetchone()
-        uname = row[0] if row else "unknown"
+        with lock:
+            cursor.execute("SELECT username FROM users WHERE user_id=?", (uid,))
+            row = cursor.fetchone()
+            uname = row[0] if row else "unknown"
 
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok:{uid}:{amount}:{periods}"),
-        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{uid}")
-    )
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok:{uid}:{amount}:{periods}"),
+            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{uid}")
+        )
 
-    bot.send_message(
-        c.message.chat.id,
-        f"📄 Заявка от @{uname}\n"
-        f"💰 Сумма: {fmt(int(amount))}\n"
-        f"📆 Дни: {periods}",
-        reply_markup=kb
-    )
-    # APPROVE
+        bot.send_message(
+            c.message.chat.id,
+            f"📄 Заявка от @{uname}\n"
+            f"💰 Сумма: {fmt(int(amount))}\n"
+            f"📆 Дни: {periods}",
+            reply_markup=kb
+        )
+
+    # ================= APPROVE =================
     elif c.data.startswith("ok:"):
         _, uid, amount, periods = c.data.split(":")
 
         with lock:
             cursor.execute("SELECT username, chat_id FROM requests WHERE user_id=?", (uid,))
             row = cursor.fetchone()
-
             if not row:
                 return
 
@@ -302,7 +303,7 @@ def cb(c):
 
         bot.send_message(chat_id, f"✅ Кредит одобрен\n📊 {percent}%")
 
-    # REJECT
+    # ================= REJECT =================
     elif c.data.startswith("no:"):
         uid = c.data.split(":")[1]
 
