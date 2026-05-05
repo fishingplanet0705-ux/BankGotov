@@ -127,6 +127,32 @@ def credit(m):
     except:
         return bot.reply_to(m, "❌ ошибка")
 
+# ================= TOP =================
+@bot.message_handler(commands=["top"])
+def top(m):
+    ensure_user(str(m.from_user.id), m.from_user.username)
+
+    with lock:
+        cursor.execute("""
+        SELECT username, rating
+        FROM users
+        ORDER BY rating DESC
+        LIMIT 10
+        """)
+        rows = cursor.fetchall()
+
+    if not rows:
+        return bot.reply_to(m, "🏆 ТОП пуст")
+
+    text = "🏆 ТОП пользователей:\n\n"
+
+    for i, (u, r) in enumerate(rows, 1):
+        u = u or "no_username"
+        text += f"{i}. @{u} ⭐ {r}\n"
+
+    bot.reply_to(m, text)
+
+    
     # ================= FIX: SAVE REQUEST =================
     with lock:
         cursor.execute("""
